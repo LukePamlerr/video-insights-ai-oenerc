@@ -9,6 +9,8 @@ export const colors = {
   accent: '#FF4500',          // Orange Red
   card: '#121212',            // Dark Gray
   highlight: '#FFD700',       // Gold
+  success: '#34C759',         // Green
+  warning: '#FF9500',         // Orange
 };
 
 export const buttonStyles = StyleSheet.create({
