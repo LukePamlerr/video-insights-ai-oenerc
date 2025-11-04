@@ -1,5 +1,6 @@
-import React, { useState } from "react";
-import { Stack } from "expo-router";
+
+import React, { useState, useEffect } from 'react';
+import { Stack } from 'expo-router';
 import {
   ScrollView,
   Pressable,
@@ -9,20 +10,22 @@ import {
   TextInput,
   Platform,
   ActivityIndicator,
-} from "react-native";
-import { IconSymbol } from "@/components/IconSymbol";
-import { useTheme } from "@react-navigation/native";
-import { colors } from "@/styles/commonStyles";
-import { SafeAreaView } from "react-native-safe-area-context";
+  Image,
+  Alert,
+} from 'react-native';
+import { IconSymbol } from '@/components/IconSymbol';
+import { useTheme } from '@react-navigation/native';
+import { colors } from '@/styles/commonStyles';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import youtubeService, { YouTubeVideoMetadata } from '@/services/youtubeService';
+import aiAnalysisService, { AnalysisResult } from '@/services/aiAnalysisService';
+import clipDownloadService from '@/services/clipDownloadService';
+import configService from '@/services/configService';
 
-interface YouTubeVideo {
-  id: string;
-  url: string;
-  title: string;
-  thumbnail: string;
-  duration: number;
-  status: "pending" | "analyzing" | "completed" | "error";
+interface YouTubeVideo extends YouTubeVideoMetadata {
+  status: 'pending' | 'analyzing' | 'completed' | 'error';
   progress: number;
+  analysis?: AnalysisResult;
 }
 
 interface Highlight {
@@ -31,111 +34,87 @@ interface Highlight {
   startTime: number;
   endTime: number;
   duration: number;
-  type: "funny" | "emotional" | "motivational" | "quote" | "visual";
+  type: 'funny' | 'emotional' | 'motivational' | 'quote' | 'visual' | 'action';
   confidence: number;
   summary: string;
+  keywords: string[];
 }
 
 export default function HomeScreen() {
   const theme = useTheme();
-  const [urlInput, setUrlInput] = useState("");
+  const [urlInput, setUrlInput] = useState('');
   const [videos, setVideos] = useState<YouTubeVideo[]>([]);
   const [highlights, setHighlights] = useState<Highlight[]>([]);
-  const [currentView, setCurrentView] = useState<"input" | "dashboard" | "highlights">("input");
+  const [currentView, setCurrentView] = useState<'input' | 'dashboard' | 'highlights'>('input');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [apiConfigured, setApiConfigured] = useState(false);
 
-  const extractVideoId = (url: string): string | null => {
-    const patterns = [
-      /(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/,
-      /youtube\.com\/embed\/([a-zA-Z0-9_-]{11})/,
-    ];
+  useEffect(() => {
+    initializeServices();
+  }, []);
 
-    for (const pattern of patterns) {
-      const match = url.match(pattern);
-      if (match) return match[1];
+  const initializeServices = async () => {
+    try {
+      await configService.loadConfig();
+      const youtubeKey = configService.getYouTubeApiKey();
+      const openaiKey = configService.getOpenAIApiKey();
+
+      if (youtubeKey) {
+        youtubeService.setApiKey(youtubeKey);
+      }
+      if (openaiKey) {
+        aiAnalysisService.setApiKey(openaiKey);
+      }
+
+      setApiConfigured(youtubeKey.length > 0);
+    } catch (error) {
+      console.log('Error initializing services:', error);
     }
-    return null;
-  };
-
-  const mockFetchVideoMetadata = (videoId: string): YouTubeVideo => {
-    const mockTitles = [
-      "Amazing AI Breakthrough",
-      "Incredible Journey",
-      "Life Changing Moment",
-      "Epic Adventure",
-      "Inspiring Story",
-    ];
-    const randomTitle = mockTitles[Math.floor(Math.random() * mockTitles.length)];
-
-    return {
-      id: videoId,
-      url: `https://youtube.com/watch?v=${videoId}`,
-      title: randomTitle,
-      thumbnail: `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`,
-      duration: Math.floor(Math.random() * 3600) + 600,
-      status: "pending",
-      progress: 0,
-    };
-  };
-
-  const mockAnalyzeVideo = async (
-    video: YouTubeVideo,
-    onProgress: (progress: number) => void
-  ): Promise<Highlight[]> => {
-    const highlightTypes: Array<"funny" | "emotional" | "motivational" | "quote" | "visual"> = [
-      "funny",
-      "emotional",
-      "motivational",
-      "quote",
-      "visual",
-    ];
-    const mockHighlights: Highlight[] = [];
-
-    for (let i = 0; i < 5; i++) {
-      onProgress((i / 5) * 100);
-      await new Promise((resolve) => setTimeout(resolve, 500));
-
-      const startTime = Math.floor(Math.random() * (video.duration - 90));
-      mockHighlights.push({
-        id: `${video.id}-${i}`,
-        videoId: video.id,
-        startTime,
-        endTime: startTime + (Math.random() * 60 + 15),
-        duration: Math.random() * 60 + 15,
-        type: highlightTypes[Math.floor(Math.random() * highlightTypes.length)],
-        confidence: Math.random() * 0.5 + 0.5,
-        summary: `Highlight ${i + 1}: Amazing moment captured`,
-      });
-    }
-
-    onProgress(100);
-    return mockHighlights;
   };
 
   const handleAddUrls = async () => {
     if (!urlInput.trim()) {
-      console.log("No URLs provided");
+      Alert.alert('Error', 'Please enter at least one YouTube URL');
+      return;
+    }
+
+    if (!apiConfigured) {
+      Alert.alert(
+        'API Key Required',
+        'Please configure your YouTube API key in Settings to analyze real videos.'
+      );
       return;
     }
 
     const urls = urlInput
-      .split("\n")
+      .split('\n')
       .map((url) => url.trim())
       .filter((url) => url.length > 0);
 
     const newVideos: YouTubeVideo[] = [];
 
     for (const url of urls) {
-      const videoId = extractVideoId(url);
+      const videoId = youtubeService.extractVideoId(url);
       if (videoId) {
-        newVideos.push(mockFetchVideoMetadata(videoId));
+        const metadata = await youtubeService.getVideoMetadata(videoId);
+        if (metadata) {
+          newVideos.push({
+            ...metadata,
+            status: 'pending',
+            progress: 0,
+          });
+        } else {
+          Alert.alert('Error', `Could not fetch metadata for video: ${url}`);
+        }
+      } else {
+        Alert.alert('Error', `Invalid YouTube URL: ${url}`);
       }
     }
 
     if (newVideos.length > 0) {
       setVideos(newVideos);
-      setCurrentView("dashboard");
-      setUrlInput("");
+      setCurrentView('dashboard');
+      setUrlInput('');
       startAnalysis(newVideos);
     }
   };
@@ -149,30 +128,79 @@ export default function HomeScreen() {
 
       setVideos((prev) =>
         prev.map((v) =>
-          v.id === video.id ? { ...v, status: "analyzing" as const } : v
+          v.id === video.id ? { ...v, status: 'analyzing' as const, progress: 10 } : v
         )
       );
 
-      const videoHighlights = await mockAnalyzeVideo(video, (progress) => {
+      try {
+        const analysis = await aiAnalysisService.analyzeVideoContent(
+          video.title,
+          video.description,
+          video.duration
+        );
+
+        if (analysis) {
+          setVideos((prev) =>
+            prev.map((v) =>
+              v.id === video.id ? { ...v, analysis, progress: 80 } : v
+            )
+          );
+
+          const videoHighlights = analysis.highlights.map((h, idx) => ({
+            id: `${video.id}-${idx}`,
+            videoId: video.id,
+            startTime: h.startTime,
+            endTime: h.endTime,
+            duration: h.endTime - h.startTime,
+            type: h.type,
+            confidence: h.confidence,
+            summary: h.summary,
+            keywords: h.keywords,
+          }));
+
+          allHighlights.push(...videoHighlights);
+        }
+
         setVideos((prev) =>
           prev.map((v) =>
-            v.id === video.id ? { ...v, progress } : v
+            v.id === video.id ? { ...v, status: 'completed' as const, progress: 100 } : v
           )
         );
-      });
-
-      allHighlights.push(...videoHighlights);
-
-      setVideos((prev) =>
-        prev.map((v) =>
-          v.id === video.id ? { ...v, status: "completed" as const, progress: 100 } : v
-        )
-      );
+      } catch (error) {
+        console.log('Error analyzing video:', error);
+        setVideos((prev) =>
+          prev.map((v) =>
+            v.id === video.id ? { ...v, status: 'error' as const } : v
+          )
+        );
+      }
     }
 
     setHighlights(allHighlights);
     setIsAnalyzing(false);
-    setCurrentView("highlights");
+    setCurrentView('highlights');
+  };
+
+  const handleDownloadClip = async (highlight: Highlight) => {
+    const video = videos.find((v) => v.id === highlight.videoId);
+    if (!video) return;
+
+    try {
+      const success = await clipDownloadService.downloadClip({
+        videoId: highlight.videoId,
+        startTime: highlight.startTime,
+        endTime: highlight.endTime,
+        title: video.title,
+      });
+
+      if (success) {
+        Alert.alert('Success', 'Clip shared successfully');
+      } else {
+        Alert.alert('Info', 'Clip URL generated. You can download it from YouTube.');
+      }
+    } catch (error) {
+      Alert.alert('Error', 'Failed to download clip');
+    }
   };
 
   const renderInputView = () => (
@@ -190,6 +218,20 @@ export default function HomeScreen() {
         </Text>
       </View>
 
+      {!apiConfigured && (
+        <View style={[styles.warningBox, { backgroundColor: colors.accent }]}>
+          <IconSymbol name="exclamationmark.triangle.fill" color={colors.text} size={20} />
+          <View style={styles.warningContent}>
+            <Text style={[styles.warningTitle, { color: colors.text }]}>
+              API Key Required
+            </Text>
+            <Text style={[styles.warningText, { color: colors.text }]}>
+              Configure your YouTube API key in Settings to analyze real videos
+            </Text>
+          </View>
+        </View>
+      )}
+
       <View style={styles.inputSection}>
         <TextInput
           style={[
@@ -206,13 +248,20 @@ export default function HomeScreen() {
           onChangeText={setUrlInput}
           multiline
           numberOfLines={6}
+          editable={apiConfigured}
         />
       </View>
 
       <Pressable
-        style={[styles.analyzeButton, { backgroundColor: colors.primary }]}
+        style={[
+          styles.analyzeButton,
+          {
+            backgroundColor: colors.primary,
+            opacity: apiConfigured && urlInput.trim() ? 1 : 0.5,
+          },
+        ]}
         onPress={handleAddUrls}
-        disabled={!urlInput.trim()}
+        disabled={!apiConfigured || !urlInput.trim()}
       >
         <IconSymbol name="play.fill" color={colors.text} size={20} />
         <Text style={[styles.analyzeButtonText, { color: colors.text }]}>
@@ -225,10 +274,10 @@ export default function HomeScreen() {
           Features
         </Text>
         {[
-          "AI Emotion Detection",
-          "Automatic Highlight Extraction",
-          "Keyword Insights",
-          "Instant Preview & Download",
+          'Real YouTube API Integration',
+          'AI-Powered Highlight Detection',
+          'Automatic Keyword Extraction',
+          'Instant Preview & Download',
         ].map((feature, index) => (
           <View key={index} style={styles.featureItem}>
             <IconSymbol name="checkmark.circle.fill" color={colors.success} size={20} />
@@ -252,7 +301,7 @@ export default function HomeScreen() {
           Analyzing Videos
         </Text>
         <Text style={[styles.dashboardSubtitle, { color: colors.textSecondary }]}>
-          {videos.length} video{videos.length !== 1 ? "s" : ""} in queue
+          {videos.length} video{videos.length !== 1 ? 's' : ''} in queue
         </Text>
       </View>
 
@@ -264,20 +313,33 @@ export default function HomeScreen() {
             { backgroundColor: colors.card, borderColor: colors.secondary },
           ]}
         >
+          {video.thumbnail && (
+            <Image
+              source={{ uri: video.thumbnail }}
+              style={styles.videoThumbnail}
+            />
+          )}
+
           <View style={styles.videoCardHeader}>
             <View style={styles.videoInfo}>
               <Text style={[styles.videoTitle, { color: colors.text }]} numberOfLines={2}>
                 {video.title}
               </Text>
-              <Text style={[styles.videoId, { color: colors.textSecondary }]}>
-                {video.id}
+              <Text style={[styles.videoChannel, { color: colors.textSecondary }]}>
+                {video.channelTitle}
+              </Text>
+              <Text style={[styles.videoDuration, { color: colors.textSecondary }]}>
+                {Math.floor(video.duration / 60)} min
               </Text>
             </View>
-            {video.status === "analyzing" && (
+            {video.status === 'analyzing' && (
               <ActivityIndicator color={colors.primary} size="small" />
             )}
-            {video.status === "completed" && (
+            {video.status === 'completed' && (
               <IconSymbol name="checkmark.circle.fill" color={colors.success} size={24} />
+            )}
+            {video.status === 'error' && (
+              <IconSymbol name="xmark.circle.fill" color={colors.accent} size={24} />
             )}
           </View>
 
@@ -325,57 +387,93 @@ export default function HomeScreen() {
         </Text>
       </View>
 
-      {highlights.map((highlight) => (
-        <View
-          key={highlight.id}
-          style={[
-            styles.highlightCard,
-            { backgroundColor: colors.card, borderColor: colors.secondary },
-          ]}
-        >
-          <View style={styles.highlightHeader}>
-            <View style={styles.highlightType}>
-              <Text
-                style={[
-                  styles.highlightTypeText,
-                  {
-                    backgroundColor: colors.accent,
-                    color: colors.text,
-                  },
-                ]}
-              >
-                {highlight.type.toUpperCase()}
-              </Text>
-            </View>
-            <Text style={[styles.highlightConfidence, { color: colors.highlight }]}>
-              {Math.round(highlight.confidence * 100)}% match
-            </Text>
-          </View>
-
-          <Text style={[styles.highlightSummary, { color: colors.text }]}>
-            {highlight.summary}
+      {highlights.length === 0 ? (
+        <View style={styles.emptyState}>
+          <IconSymbol name="film" color={colors.textSecondary} size={48} />
+          <Text style={[styles.emptyStateText, { color: colors.textSecondary }]}>
+            No highlights found
           </Text>
-
-          <View style={styles.highlightFooter}>
-            <Text style={[styles.highlightDuration, { color: colors.textSecondary }]}>
-              {Math.round(highlight.duration)}s clip
-            </Text>
-            <Pressable
-              style={[styles.downloadButton, { backgroundColor: colors.primary }]}
-            >
-              <IconSymbol name="arrow.down.circle.fill" color={colors.text} size={18} />
-              <Text style={[styles.downloadButtonText, { color: colors.text }]}>
-                Download
-              </Text>
-            </Pressable>
-          </View>
         </View>
-      ))}
+      ) : (
+        highlights.map((highlight) => {
+          const video = videos.find((v) => v.id === highlight.videoId);
+          return (
+            <View
+              key={highlight.id}
+              style={[
+                styles.highlightCard,
+                { backgroundColor: colors.card, borderColor: colors.secondary },
+              ]}
+            >
+              <View style={styles.highlightHeader}>
+                <View style={styles.highlightType}>
+                  <Text
+                    style={[
+                      styles.highlightTypeText,
+                      {
+                        backgroundColor: colors.accent,
+                        color: colors.text,
+                      },
+                    ]}
+                  >
+                    {highlight.type.toUpperCase()}
+                  </Text>
+                </View>
+                <Text style={[styles.highlightConfidence, { color: colors.highlight }]}>
+                  {Math.round(highlight.confidence * 100)}% match
+                </Text>
+              </View>
+
+              <Text style={[styles.highlightSummary, { color: colors.text }]}>
+                {highlight.summary}
+              </Text>
+
+              {highlight.keywords.length > 0 && (
+                <View style={styles.keywordsContainer}>
+                  {highlight.keywords.slice(0, 3).map((keyword, idx) => (
+                    <View
+                      key={idx}
+                      style={[
+                        styles.keyword,
+                        { backgroundColor: colors.secondary },
+                      ]}
+                    >
+                      <Text style={[styles.keywordText, { color: colors.primary }]}>
+                        {keyword}
+                      </Text>
+                    </View>
+                  ))}
+                </View>
+              )}
+
+              <View style={styles.highlightFooter}>
+                <View>
+                  <Text style={[styles.highlightDuration, { color: colors.textSecondary }]}>
+                    {Math.round(highlight.duration)}s clip
+                  </Text>
+                  <Text style={[styles.highlightTime, { color: colors.textSecondary }]}>
+                    {Math.floor(highlight.startTime / 60)}:{String(Math.floor(highlight.startTime % 60)).padStart(2, '0')} - {Math.floor(highlight.endTime / 60)}:{String(Math.floor(highlight.endTime % 60)).padStart(2, '0')}
+                  </Text>
+                </View>
+                <Pressable
+                  style={[styles.downloadButton, { backgroundColor: colors.primary }]}
+                  onPress={() => handleDownloadClip(highlight)}
+                >
+                  <IconSymbol name="arrow.down.circle.fill" color={colors.text} size={18} />
+                  <Text style={[styles.downloadButtonText, { color: colors.text }]}>
+                    Download
+                  </Text>
+                </Pressable>
+              </View>
+            </View>
+          );
+        })
+      )}
 
       <Pressable
         style={[styles.newAnalysisButton, { backgroundColor: colors.secondary }]}
         onPress={() => {
-          setCurrentView("input");
+          setCurrentView('input');
           setVideos([]);
           setHighlights([]);
         }}
@@ -395,10 +493,10 @@ export default function HomeScreen() {
 
   return (
     <>
-      {Platform.OS === "ios" && (
+      {Platform.OS === 'ios' && (
         <Stack.Screen
           options={{
-            title: "Highlight Analyzer",
+            title: 'Highlight Analyzer',
             headerRight: renderHeaderRight,
             headerStyle: {
               backgroundColor: colors.background,
@@ -412,11 +510,11 @@ export default function HomeScreen() {
       )}
       <SafeAreaView
         style={[styles.safeArea, { backgroundColor: colors.background }]}
-        edges={["top"]}
+        edges={['top']}
       >
-        {currentView === "input" && renderInputView()}
-        {currentView === "dashboard" && renderDashboardView()}
-        {currentView === "highlights" && renderHighlightsView()}
+        {currentView === 'input' && renderInputView()}
+        {currentView === 'dashboard' && renderDashboardView()}
+        {currentView === 'highlights' && renderHighlightsView()}
       </SafeAreaView>
     </>
   );
@@ -432,20 +530,40 @@ const styles = StyleSheet.create({
   inputContent: {
     paddingHorizontal: 16,
     paddingVertical: 24,
-    paddingBottom: Platform.OS === "android" ? 120 : 24,
+    paddingBottom: Platform.OS === 'android' ? 120 : 24,
   },
   header: {
     marginBottom: 32,
   },
   title: {
     fontSize: 32,
-    fontWeight: "800",
+    fontWeight: '800',
     marginBottom: 8,
   },
   subtitle: {
     fontSize: 16,
-    fontWeight: "500",
+    fontWeight: '500',
     lineHeight: 24,
+  },
+  warningBox: {
+    flexDirection: 'row',
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 24,
+    gap: 12,
+  },
+  warningContent: {
+    flex: 1,
+  },
+  warningTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    marginBottom: 4,
+  },
+  warningText: {
+    fontSize: 12,
+    fontWeight: '500',
+    lineHeight: 16,
   },
   inputSection: {
     marginBottom: 24,
@@ -455,14 +573,14 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     padding: 16,
     fontSize: 14,
-    fontWeight: "500",
+    fontWeight: '500',
     minHeight: 120,
-    textAlignVertical: "top",
+    textAlignVertical: 'top',
   },
   analyzeButton: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
     paddingVertical: 16,
     borderRadius: 12,
     marginBottom: 32,
@@ -470,54 +588,59 @@ const styles = StyleSheet.create({
   },
   analyzeButtonText: {
     fontSize: 16,
-    fontWeight: "700",
+    fontWeight: '700',
   },
   featuresList: {
     marginTop: 16,
   },
   featuresTitle: {
     fontSize: 18,
-    fontWeight: "700",
+    fontWeight: '700',
     marginBottom: 16,
   },
   featureItem: {
-    flexDirection: "row",
-    alignItems: "center",
+    flexDirection: 'row',
+    alignItems: 'center',
     marginBottom: 12,
     gap: 12,
   },
   featureText: {
     fontSize: 14,
-    fontWeight: "500",
+    fontWeight: '500',
   },
   dashboardContent: {
     paddingHorizontal: 16,
     paddingVertical: 24,
-    paddingBottom: Platform.OS === "android" ? 120 : 24,
+    paddingBottom: Platform.OS === 'android' ? 120 : 24,
   },
   dashboardHeader: {
     marginBottom: 24,
   },
   dashboardTitle: {
     fontSize: 28,
-    fontWeight: "800",
+    fontWeight: '800',
     marginBottom: 4,
   },
   dashboardSubtitle: {
     fontSize: 14,
-    fontWeight: "500",
+    fontWeight: '500',
   },
   videoCard: {
     borderWidth: 1,
     borderRadius: 12,
-    padding: 16,
+    overflow: 'hidden',
     marginBottom: 12,
   },
+  videoThumbnail: {
+    width: '100%',
+    height: 180,
+    backgroundColor: colors.secondary,
+  },
   videoCardHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
-    marginBottom: 12,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    padding: 12,
   },
   videoInfo: {
     flex: 1,
@@ -525,54 +648,72 @@ const styles = StyleSheet.create({
   },
   videoTitle: {
     fontSize: 16,
-    fontWeight: "700",
+    fontWeight: '700',
     marginBottom: 4,
   },
-  videoId: {
+  videoChannel: {
     fontSize: 12,
-    fontWeight: "500",
+    fontWeight: '500',
+    marginBottom: 4,
+  },
+  videoDuration: {
+    fontSize: 12,
+    fontWeight: '500',
   },
   progressBar: {
     height: 6,
     backgroundColor: colors.secondary,
     borderRadius: 3,
-    overflow: "hidden",
+    overflow: 'hidden',
+    marginHorizontal: 12,
     marginBottom: 8,
   },
   progressFill: {
-    height: "100%",
+    height: '100%',
     borderRadius: 3,
   },
   progressText: {
     fontSize: 12,
-    fontWeight: "600",
+    fontWeight: '600',
+    paddingHorizontal: 12,
+    paddingBottom: 12,
   },
   analyzingFooter: {
-    alignItems: "center",
-    justifyContent: "center",
+    alignItems: 'center',
+    justifyContent: 'center',
     paddingVertical: 32,
     gap: 12,
   },
   analyzingText: {
     fontSize: 14,
-    fontWeight: "600",
+    fontWeight: '600',
   },
   highlightsContent: {
     paddingHorizontal: 16,
     paddingVertical: 24,
-    paddingBottom: Platform.OS === "android" ? 120 : 24,
+    paddingBottom: Platform.OS === 'android' ? 120 : 24,
   },
   highlightsHeader: {
     marginBottom: 24,
   },
   highlightsTitle: {
     fontSize: 28,
-    fontWeight: "800",
+    fontWeight: '800',
     marginBottom: 4,
   },
   highlightsSubtitle: {
     fontSize: 14,
-    fontWeight: "500",
+    fontWeight: '500',
+  },
+  emptyState: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 48,
+    gap: 12,
+  },
+  emptyStateText: {
+    fontSize: 16,
+    fontWeight: '600',
   },
   highlightCard: {
     borderWidth: 1,
@@ -581,9 +722,9 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   highlightHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
     marginBottom: 12,
   },
   highlightType: {
@@ -591,34 +732,55 @@ const styles = StyleSheet.create({
   },
   highlightTypeText: {
     fontSize: 11,
-    fontWeight: "700",
+    fontWeight: '700',
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 6,
-    overflow: "hidden",
+    overflow: 'hidden',
+    alignSelf: 'flex-start',
   },
   highlightConfidence: {
     fontSize: 12,
-    fontWeight: "700",
+    fontWeight: '700',
   },
   highlightSummary: {
     fontSize: 14,
-    fontWeight: "500",
+    fontWeight: '500',
     lineHeight: 20,
     marginBottom: 12,
   },
+  keywordsContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 12,
+  },
+  keyword: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+  keywordText: {
+    fontSize: 11,
+    fontWeight: '600',
+  },
   highlightFooter: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
   },
   highlightDuration: {
     fontSize: 12,
-    fontWeight: "600",
+    fontWeight: '600',
+  },
+  highlightTime: {
+    fontSize: 11,
+    fontWeight: '500',
+    marginTop: 2,
   },
   downloadButton: {
-    flexDirection: "row",
-    alignItems: "center",
+    flexDirection: 'row',
+    alignItems: 'center',
     paddingHorizontal: 12,
     paddingVertical: 8,
     borderRadius: 8,
@@ -626,17 +788,17 @@ const styles = StyleSheet.create({
   },
   downloadButtonText: {
     fontSize: 12,
-    fontWeight: "700",
+    fontWeight: '700',
   },
   newAnalysisButton: {
     paddingVertical: 16,
     borderRadius: 12,
-    alignItems: "center",
+    alignItems: 'center',
     marginTop: 24,
   },
   newAnalysisButtonText: {
     fontSize: 16,
-    fontWeight: "700",
+    fontWeight: '700',
   },
   headerButtonContainer: {
     padding: 8,
