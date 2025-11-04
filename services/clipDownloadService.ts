@@ -1,5 +1,5 @@
 
-import * as FileSystem from 'expo-file-system';
+import { documentDirectory, writeAsStringAsync, EncodingType } from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 
 export interface ClipDownloadOptions {
@@ -15,13 +15,13 @@ class ClipDownloadService {
       // Create a mock video file for demonstration
       // In production, you would use FFmpeg or a video processing service
       const fileName = `${options.title.replace(/[^a-zA-Z0-9]/g, '_')}_${options.startTime}-${options.endTime}.mp4`;
-      const filePath = `${FileSystem.documentDirectory}${fileName}`;
+      const filePath = `${documentDirectory}${fileName}`;
 
       // Create a placeholder file
-      await FileSystem.writeAsStringAsync(
+      await writeAsStringAsync(
         filePath,
         `Video clip: ${options.title}\nStart: ${options.startTime}s\nEnd: ${options.endTime}s`,
-        { encoding: FileSystem.EncodingType.UTF8 }
+        { encoding: EncodingType.UTF8 }
       );
 
       // Share the file
@@ -69,12 +69,12 @@ class ClipDownloadService {
       };
 
       const fileName = `${title.replace(/[^a-zA-Z0-9]/g, '_')}_metadata.json`;
-      const filePath = `${FileSystem.documentDirectory}${fileName}`;
+      const filePath = `${documentDirectory}${fileName}`;
 
-      await FileSystem.writeAsStringAsync(
+      await writeAsStringAsync(
         filePath,
         JSON.stringify(metadata, null, 2),
-        { encoding: FileSystem.EncodingType.UTF8 }
+        { encoding: EncodingType.UTF8 }
       );
 
       const canShare = await Sharing.isAvailableAsync();
